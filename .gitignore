@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env.local
+errors/*.png
+logs/*.log
+bot_state.db
+*.sqlite
+.vscode/
+.idea/
