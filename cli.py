@@ -38,12 +38,14 @@ console = Console()
 
 
 # ---------------------------------------------------------------- bootstrap
-def _bootstrap():
+def _bootstrap(debug: bool = False):
     cfg = load_config()
-    setup_logger(cfg.bot.logs_dir)
-    adb = ADBController.from_config(cfg)
+    setup_logger(cfg.bot.logs_dir, level="DEBUG" if debug else "INFO")
+    if debug:
+        logger.info(f"DEBUG MODE — screenshots to {cfg.bot.debug_dir}, confidence logging on")
+    adb = ADBController.from_config(cfg, debug=debug)
     adb.connect()
-    vision = Vision(cfg.bot.images_dir)
+    vision = Vision(cfg.bot.images_dir, debug=debug)
     popup = PopupHandler(cfg.bot.errors_dir)
     nav = Navigator(popup)
     state = BotState(cfg.bot.state_db)
@@ -73,18 +75,25 @@ def screenshot(name: str = typer.Option("debug", help="Filename stem")):
     console.print(f"Saved: {out}")
 
 
+_DEBUG_OPT = typer.Option(
+    False, "--debug", "-d",
+    help="Save before/after tap screenshots with red target rectangle, log every "
+         "match confidence score, lower match threshold for visibility.",
+)
+
+
 @app.command()
-def daily():
+def daily(debug: bool = _DEBUG_OPT):
     """Run daily task loop."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.daily import DailyTask
     DailyTask(adb, vision, popup, nav, state).run()
 
 
 @app.command()
-def campaign():
+def campaign(debug: bool = _DEBUG_OPT):
     """Campaign push only."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.campaign import CampaignTask
     CampaignTask(
         adb, vision, popup, nav, state,
@@ -96,33 +105,33 @@ def campaign():
 
 
 @app.command()
-def tower():
+def tower(debug: bool = _DEBUG_OPT):
     """King's Tower + Faction Tower push."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.tower import TowerTask
     TowerTask(adb, vision, popup, nav, state).run()
 
 
 @app.command()
-def reroll():
+def reroll(debug: bool = _DEBUG_OPT):
     """Reroll a new guest account until a target hero is pulled."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.reroll import RerollTask
     RerollTask(adb, vision, popup, nav, state).run()
 
 
 @app.command()
-def codes():
+def codes(debug: bool = _DEBUG_OPT):
     """Enter redemption codes."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.codes import CodesTask
     CodesTask(adb, vision, popup, nav, state).run()
 
 
 @app.command()
-def run():
+def run(debug: bool = _DEBUG_OPT):
     """Full bot loop: daily tasks + campaign + tower, with session breaks."""
-    cfg, adb, vision, popup, nav, state = _bootstrap()
+    cfg, adb, vision, popup, nav, state = _bootstrap(debug=debug)
     from bot.tasks.daily import DailyTask
     from bot.tasks.campaign import CampaignTask
     from bot.tasks.tower import TowerTask

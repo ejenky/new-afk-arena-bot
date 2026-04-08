@@ -9,8 +9,11 @@ import io
 import random
 import subprocess
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Tuple
 
+import cv2
 import numpy as np
 from PIL import Image
 from loguru import logger
@@ -28,6 +31,8 @@ class ADBController:
         randomize_px: int = 5,
         package: str = "com.lilithgame.hgame.gp",
         activity: str = "com.lilithgame.hgame.GameActivity",
+        debug: bool = False,
+        debug_dir: Optional[Path] = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -35,6 +40,11 @@ class ADBController:
         self.randomize_px = randomize_px
         self.package = package
         self.activity = activity
+        self.debug = debug
+        self.debug_dir = Path(debug_dir) if debug_dir else Path("debug")
+        if self.debug:
+            self.debug_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"ADB debug mode ON — saving screenshots to {self.debug_dir}")
         self._connected = False
 
     # ------------------------------------------------------------------ core
@@ -86,16 +96,56 @@ class ADBController:
         arr = np.array(image)
         return arr[:, :, ::-1].copy()  # RGB -> BGR
 
+    # --------------------------------------------------------- debug helpers
+    def _save_tap_debug(self, x: int, y: int, label: str, ts: str, draw_target: bool) -> None:
+        """Save a debug screenshot of the current frame.
+
+        If draw_target is True, overlays a red rectangle and crosshair on (x, y).
+        Used before/after every tap when debug mode is on.
+        """
+        try:
+            shot = self.screenshot()
+        except Exception as e:
+            logger.warning(f"debug screenshot grab failed: {e}")
+            return
+        if draw_target:
+            size = 60
+            cv2.rectangle(
+                shot,
+                (x - size // 2, y - size // 2),
+                (x + size // 2, y + size // 2),
+                (0, 0, 255),  # BGR red
+                4,
+            )
+            cv2.line(shot, (x - size, y), (x + size, y), (0, 0, 255), 2)
+            cv2.line(shot, (x, y - size), (x, y + size), (0, 0, 255), 2)
+        path = self.debug_dir / f"tap_{ts}_{label}_{x}x{y}.png"
+        try:
+            cv2.imwrite(str(path), shot)
+            logger.info(f"debug: {path.name}")
+        except Exception as e:
+            logger.warning(f"debug screenshot save failed: {e}")
+
     # ----------------------------------------------------------------- taps
     def tap(self, x: int, y: int, randomize: bool = True, post_delay: bool = True) -> None:
         self.ensure_connected()
         if randomize and self.randomize_px > 0:
             x += random.randint(-self.randomize_px, self.randomize_px)
             y += random.randint(-self.randomize_px, self.randomize_px)
-        logger.debug(f"tap ({x},{y})")
+
+        ts = ""
+        if self.debug:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+            self._save_tap_debug(x, y, "before", ts, draw_target=True)
+
+        log_fn = logger.info if self.debug else logger.debug
+        log_fn(f"tap ({x},{y})")
         self._adb("shell", "input", "tap", str(x), str(y))
         if post_delay:
             time.sleep(random.uniform(0.3, 0.8))
+
+        if self.debug:
+            self._save_tap_debug(x, y, "after", ts, draw_target=False)
 
     def long_press(self, x: int, y: int, duration_ms: int = 1000) -> None:
         self.swipe(x, y, x, y, duration_ms=duration_ms)
@@ -153,11 +203,13 @@ class ADBController:
 
     # ------------------------------------------------------------- factories
     @classmethod
-    def from_config(cls, cfg) -> "ADBController":
+    def from_config(cls, cfg, debug: bool = False) -> "ADBController":
         return cls(
             host=cfg.emulator.host,
             port=cfg.emulator.port,
             randomize_px=cfg.bot.tap_randomize_px,
             package=cfg.game.package,
             activity=cfg.game.activity,
+            debug=debug,
+            debug_dir=getattr(cfg.bot, "debug_dir", None),
         )

@@ -18,10 +18,14 @@ class TemplateMissingError(FileNotFoundError):
     pass
 
 
+DEFAULT_CONFIDENCE: float = 0.70
+
+
 class Vision:
-    def __init__(self, images_dir: Path) -> None:
+    def __init__(self, images_dir: Path, debug: bool = False) -> None:
         self.images_dir = Path(images_dir)
         self._cache: dict[str, np.ndarray] = {}
+        self.debug = debug
 
     # --------------------------------------------------------------- loading
     def load_template(self, name: str) -> np.ndarray:
@@ -39,17 +43,30 @@ class Vision:
     def template_exists(self, name: str) -> bool:
         return (self.images_dir / name).exists()
 
+    # ------------------------------------------------------------ debug log
+    def _log_match(self, template_name: str, max_val: float, confidence: float, found: bool) -> None:
+        log_fn = logger.info if self.debug else logger.debug
+        if found:
+            log_fn(f"match [{template_name}] confidence={max_val:.3f} >= {confidence:.2f} OK")
+        else:
+            log_fn(f"match [{template_name}] confidence={max_val:.3f} <  {confidence:.2f} NOT FOUND")
+
+    def _log_missing(self, template_name: str) -> None:
+        log_fn = logger.warning if self.debug else logger.debug
+        log_fn(f"match [{template_name}] MISSING TEMPLATE (file not found)")
+
     # ---------------------------------------------------------------- search
     def find(
         self,
         screenshot: np.ndarray,
         template_name: str,
-        confidence: float = 0.85,
+        confidence: float = DEFAULT_CONFIDENCE,
         region: Optional[Tuple[int, int, int, int]] = None,
     ) -> Optional[Match]:
         try:
             template = self.load_template(template_name)
         except TemplateMissingError:
+            self._log_missing(template_name)
             return None
 
         haystack = screenshot
@@ -60,11 +77,14 @@ class Vision:
             offset_x, offset_y = x, y
 
         if haystack.shape[0] < template.shape[0] or haystack.shape[1] < template.shape[1]:
+            self._log_match(template_name, 0.0, confidence, False)
             return None
 
         result = cv2.matchTemplate(haystack, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(result)
-        if max_val < confidence:
+        found = max_val >= confidence
+        self._log_match(template_name, float(max_val), confidence, found)
+        if not found:
             return None
         h, w = template.shape[:2]
         cx = max_loc[0] + w // 2 + offset_x
@@ -75,13 +95,15 @@ class Vision:
         self,
         screenshot: np.ndarray,
         template_name: str,
-        confidence: float = 0.85,
+        confidence: float = DEFAULT_CONFIDENCE,
     ) -> List[Tuple[int, int]]:
         try:
             template = self.load_template(template_name)
         except TemplateMissingError:
+            self._log_missing(template_name)
             return []
         result = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(result)
         ys, xs = np.where(result >= confidence)
         h, w = template.shape[:2]
         matches = [(int(x + w // 2), int(y + h // 2)) for x, y in zip(xs, ys)]
@@ -90,6 +112,9 @@ class Vision:
         for m in matches:
             if not any(abs(m[0] - f[0]) < 20 and abs(m[1] - f[1]) < 20 for f in filtered):
                 filtered.append(m)
+        self._log_match(
+            template_name, float(max_val), confidence, found=bool(filtered)
+        )
         return filtered
 
     # ----------------------------------------------------------------- pixel
@@ -112,7 +137,7 @@ class Vision:
         adb,
         template_name: str,
         timeout: float = 30,
-        confidence: float = 0.85,
+        confidence: float = DEFAULT_CONFIDENCE,
         poll_interval: float = 1.0,
     ) -> Optional[Match]:
         start = time.time()
@@ -121,7 +146,8 @@ class Vision:
             if match:
                 return match
             time.sleep(poll_interval)
-        logger.debug(f"wait_for timeout: {template_name}")
+        log_fn = logger.warning if self.debug else logger.debug
+        log_fn(f"wait_for timeout: {template_name}")
         return None
 
     def wait_and_tap(
@@ -129,7 +155,7 @@ class Vision:
         adb,
         template_name: str,
         timeout: float = 30,
-        confidence: float = 0.85,
+        confidence: float = DEFAULT_CONFIDENCE,
     ) -> bool:
         match = self.wait_for(adb, template_name, timeout, confidence)
         if match:
@@ -142,7 +168,7 @@ class Vision:
         adb,
         screenshot: np.ndarray,
         template_name: str,
-        confidence: float = 0.85,
+        confidence: float = DEFAULT_CONFIDENCE,
     ) -> bool:
         match = self.find(screenshot, template_name, confidence)
         if match:

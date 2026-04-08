@@ -42,6 +42,7 @@ class BotConfig:
     errors_dir: Path
     logs_dir: Path
     state_db: Path
+    debug_dir: Path
 
 
 @dataclass
@@ -98,6 +99,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         errors_dir=PROJECT_ROOT / parser.get("bot", "errors_dir"),
         logs_dir=PROJECT_ROOT / parser.get("bot", "logs_dir"),
         state_db=PROJECT_ROOT / parser.get("bot", "state_db"),
+        debug_dir=PROJECT_ROOT / parser.get("bot", "debug_dir", fallback="debug"),
     )
     tasks = TaskToggles(
         daily_tasks=parser.getboolean("tasks", "daily_tasks"),
@@ -117,7 +119,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         wait_hours_on_block=parser.getfloat("campaign", "wait_hours_on_block"),
     )
 
-    for d in (bot.images_dir, bot.errors_dir, bot.logs_dir):
+    for d in (bot.images_dir, bot.errors_dir, bot.logs_dir, bot.debug_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     return Config(emulator=emulator, game=game, bot=bot, tasks=tasks, campaign=campaign)

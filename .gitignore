@@ -6,6 +6,7 @@ venv/
 .env.local
 errors/*.png
 logs/*.log
+debug/*.png
 bot_state.db
 *.sqlite
 .vscode/
