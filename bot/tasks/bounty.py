@@ -1,32 +1,37 @@
-"""Bounty Board — dispatch daily bounties and collect rewards."""
+"""Bounty Board — coordinate-driven dispatch and collection."""
 
 from __future__ import annotations
 
 import time
 
 from .base import BaseTask
+from .. import coords
 
 
 class BountyTask(BaseTask):
     name = "bounty"
 
+    def _dismiss(self) -> None:
+        self.popup.dismiss_all(self.adb, self.vision)
+
     def run(self) -> bool:
         self.log("running bounty board")
-        if not self.nav.goto_bounty_board(self.adb, self.vision):
-            return False
-        self.popup.dismiss_all(self.adb, self.vision)
+        self.nav.goto_bounty_board(self.adb, self.vision)
+        time.sleep(1.0)
+        self._dismiss()
 
-        # Collect any completed bounties first.
-        self.vision.wait_and_tap(self.adb, "buttons/collect_all.png", timeout=3)
-        self.popup.dismiss_all(self.adb, self.vision)
+        # Collect completed bounties first.
+        self.adb.tap(*coords.BOUNTY_COLLECT_ALL)
+        time.sleep(0.8)
+        self._dismiss()
 
-        # Dispatch as many bounties as possible with "Auto Dispatch".
+        # Auto-dispatch loop — tap, confirm, dismiss, repeat.
         for _ in range(10):
-            if not self.vision.wait_and_tap(self.adb, "buttons/auto_dispatch.png", timeout=3):
-                break
+            self.adb.tap(*coords.BOUNTY_AUTO_DISPATCH)
             time.sleep(0.8)
-            self.vision.wait_and_tap(self.adb, "buttons/confirm.png", timeout=3)
-            self.popup.dismiss_all(self.adb, self.vision)
+            self.adb.tap(*coords.BOUNTY_DISPATCH_CONFIRM)
+            time.sleep(0.6)
+            self._dismiss()
 
         self._record("bounty", "ok")
         return True

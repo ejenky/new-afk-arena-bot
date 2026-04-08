@@ -1,158 +1,141 @@
-"""Screen detection and menu navigation state machine.
+"""Coordinate-first menu navigator for 1080x1920 AFK Arena.
 
-Each known screen has an identifier template. The navigator uses these to
-detect the current screen and walk the menu graph back to the main menu,
-from which it can reach any other screen.
+Previously this module used template matching to identify screens and route.
+Since the emulator is locked to 1080x1920 we can navigate the entire game
+with fixed taps, so this refactor drops template-based routing and uses the
+hardcoded coordinates from `bot.coords`.
+
+Template matching is only used by callers for:
+    - Victory / Defeat detection (tasks/campaign.py, tasks/tower.py)
+    - Popup dismissal (popup_handler.py)
+    - Optional pixel-color verification after navigation
 """
 
 from __future__ import annotations
 
 import time
-from enum import Enum
-from typing import Dict, Optional, Tuple
 
 from loguru import logger
 
-
-class Screen(str, Enum):
-    UNKNOWN = "unknown"
-    MAIN_MENU = "main_menu"
-    CAMPAIGN_MAP = "campaign_map"
-    DARK_FOREST = "dark_forest"
-    RANHORN = "ranhorn"
-    TAVERN = "tavern"
-    STORE = "store"
-    ARENA = "arena"
-    KINGS_TOWER = "kings_tower"
-    BOUNTY_BOARD = "bounty_board"
-    LABYRINTH = "labyrinth"
-    GUILD_HALL = "guild_hall"
-    HEROES = "heroes"
-    VICTORY = "victory"
-    DEFEAT = "defeat"
-
-
-# Templates used to identify each screen.
-SCREEN_IDENTIFIERS: Dict[Screen, str] = {
-    Screen.MAIN_MENU: "screens/main_menu.png",
-    Screen.CAMPAIGN_MAP: "screens/campaign_map.png",
-    Screen.DARK_FOREST: "screens/dark_forest.png",
-    Screen.RANHORN: "screens/ranhorn.png",
-    Screen.TAVERN: "screens/tavern.png",
-    Screen.STORE: "screens/store.png",
-    Screen.ARENA: "screens/arena.png",
-    Screen.KINGS_TOWER: "screens/kings_tower.png",
-    Screen.BOUNTY_BOARD: "screens/bounty_board.png",
-    Screen.LABYRINTH: "screens/labyrinth.png",
-    Screen.GUILD_HALL: "screens/guild_hall.png",
-    Screen.HEROES: "screens/heroes.png",
-    Screen.VICTORY: "screens/victory.png",
-    Screen.DEFEAT: "screens/defeat.png",
-}
-
-# Bottom-nav tap coordinates for 1080x1920 portrait.
-BOTTOM_NAV: Dict[Screen, Tuple[int, int]] = {
-    Screen.RANHORN:      (108, 1820),
-    Screen.DARK_FOREST:  (324, 1820),
-    Screen.CAMPAIGN_MAP: (540, 1820),
-    Screen.HEROES:       (756, 1820),
-    Screen.MAIN_MENU:    (972, 1820),  # "More"/main
-}
+from . import coords
 
 
 class Navigator:
+    """Navigate between major screens by tapping known coordinates.
+
+    All methods take `adb` so they can issue taps. `vision` is accepted for
+    optional pixel-color verification but is never required.
+    """
+
     def __init__(self, popup_handler) -> None:
         self.popup = popup_handler
 
-    # ------------------------------------------------------------- detection
-    def detect_screen(self, adb, vision) -> Screen:
-        screenshot = adb.screenshot()
-        for screen, template in SCREEN_IDENTIFIERS.items():
-            if not vision.template_exists(template):
-                continue
-            if vision.find(screenshot, template, confidence=0.82):
-                logger.debug(f"detect_screen -> {screen.value}")
-                return screen
-        return Screen.UNKNOWN
-
-    # ---------------------------------------------------------- "home" reset
-    def goto_main_menu(self, adb, vision, max_attempts: int = 10) -> bool:
-        """Try to reach campaign/main menu by dismissing popups and pressing back."""
-        for _ in range(max_attempts):
+    # ------------------------------------------------------------ primitives
+    def _nav_tap(self, adb, coord, settle: float = 1.5, vision=None) -> None:
+        """Tap a coordinate, sleep for the screen to settle, dismiss popups."""
+        self.popup.dismiss_all(adb, vision) if vision else None
+        adb.tap(*coord)
+        time.sleep(settle)
+        if vision:
             self.popup.dismiss_all(adb, vision)
-            screen = self.detect_screen(adb, vision)
-            if screen == Screen.CAMPAIGN_MAP or screen == Screen.MAIN_MENU:
-                return True
-            if screen == Screen.UNKNOWN:
-                adb.back()
-            else:
-                # Tap campaign bottom-nav.
-                adb.tap(*BOTTOM_NAV[Screen.CAMPAIGN_MAP])
-            time.sleep(1.5)
-        logger.warning("goto_main_menu: failed to reach main menu")
-        return False
 
-    # ---------------------------------------------------------------- routes
-    def goto_campaign(self, adb, vision) -> bool:
-        self.popup.dismiss_all(adb, vision)
-        adb.tap(*BOTTOM_NAV[Screen.CAMPAIGN_MAP])
-        time.sleep(1.5)
-        self.popup.dismiss_all(adb, vision)
+    # ------------------------------------------------------ bottom-nav tabs
+    def goto_campaign(self, adb, vision=None) -> bool:
+        logger.debug("nav -> campaign")
+        self._nav_tap(adb, coords.NAV_CAMPAIGN, vision=vision)
         return True
 
-    def goto_dark_forest(self, adb, vision) -> bool:
-        self.popup.dismiss_all(adb, vision)
-        adb.tap(*BOTTOM_NAV[Screen.DARK_FOREST])
+    def goto_dark_forest(self, adb, vision=None) -> bool:
+        logger.debug("nav -> dark_forest")
+        self._nav_tap(adb, coords.NAV_DARK_FOREST, vision=vision)
+        return True
+
+    def goto_ranhorn(self, adb, vision=None) -> bool:
+        logger.debug("nav -> ranhorn")
+        self._nav_tap(adb, coords.NAV_RANHORN, vision=vision)
+        return True
+
+    def goto_heroes(self, adb, vision=None) -> bool:
+        logger.debug("nav -> heroes")
+        self._nav_tap(adb, coords.NAV_HEROES, vision=vision)
+        return True
+
+    def goto_chat(self, adb, vision=None) -> bool:
+        logger.debug("nav -> chat/more")
+        self._nav_tap(adb, coords.NAV_CHAT, vision=vision)
+        return True
+
+    # ------------------------------------------------------ Ranhorn sub-nav
+    def goto_tavern(self, adb, vision=None) -> bool:
+        self.goto_ranhorn(adb, vision)
+        adb.tap(*coords.RANHORN_NOBLE_TAVERN)
         time.sleep(1.5)
-        self.popup.dismiss_all(adb, vision)
-        return self.detect_screen(adb, vision) == Screen.DARK_FOREST
+        return True
 
-    def goto_ranhorn(self, adb, vision) -> bool:
-        self.popup.dismiss_all(adb, vision)
-        adb.tap(*BOTTOM_NAV[Screen.RANHORN])
+    def goto_oak_inn(self, adb, vision=None) -> bool:
+        self.goto_ranhorn(adb, vision)
+        adb.tap(*coords.RANHORN_OAK_INN)
         time.sleep(1.5)
-        self.popup.dismiss_all(adb, vision)
-        return self.detect_screen(adb, vision) == Screen.RANHORN
+        return True
 
-    def goto_heroes(self, adb, vision) -> bool:
-        self.popup.dismiss_all(adb, vision)
-        adb.tap(*BOTTOM_NAV[Screen.HEROES])
+    def goto_store(self, adb, vision=None) -> bool:
+        self.goto_ranhorn(adb, vision)
+        adb.tap(*coords.RANHORN_STORE)
         time.sleep(1.5)
-        self.popup.dismiss_all(adb, vision)
-        return self.detect_screen(adb, vision) == Screen.HEROES
+        return True
 
-    # ------------------------------------------------ sub-screens via icons
-    def goto_tavern(self, adb, vision) -> bool:
-        if not self.goto_ranhorn(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/tavern_icon.png", timeout=5)
+    def goto_guild_hall(self, adb, vision=None) -> bool:
+        self.goto_ranhorn(adb, vision)
+        adb.tap(*coords.RANHORN_GUILD_HALL)
+        time.sleep(1.5)
+        return True
 
-    def goto_store(self, adb, vision) -> bool:
-        if not self.goto_ranhorn(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/store_icon.png", timeout=5)
+    def goto_friends(self, adb, vision=None) -> bool:
+        self.goto_ranhorn(adb, vision)
+        adb.tap(*coords.RANHORN_FRIENDS_ICON)
+        time.sleep(1.5)
+        return True
 
-    def goto_guild_hall(self, adb, vision) -> bool:
-        if not self.goto_ranhorn(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/guild_hall_icon.png", timeout=5)
+    # -------------------------------------------------- Dark Forest sub-nav
+    def goto_kings_tower(self, adb, vision=None) -> bool:
+        self.goto_dark_forest(adb, vision)
+        adb.tap(*coords.FOREST_KINGS_TOWER)
+        time.sleep(1.5)
+        return True
 
-    def goto_kings_tower(self, adb, vision) -> bool:
-        if not self.goto_dark_forest(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/kings_tower_icon.png", timeout=5)
+    def goto_arena(self, adb, vision=None) -> bool:
+        self.goto_dark_forest(adb, vision)
+        adb.tap(*coords.FOREST_ARENA)
+        time.sleep(1.5)
+        return True
 
-    def goto_arena(self, adb, vision) -> bool:
-        if not self.goto_dark_forest(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/arena_icon.png", timeout=5)
+    def goto_labyrinth(self, adb, vision=None) -> bool:
+        self.goto_dark_forest(adb, vision)
+        adb.tap(*coords.FOREST_LABYRINTH)
+        time.sleep(1.5)
+        return True
 
-    def goto_labyrinth(self, adb, vision) -> bool:
-        if not self.goto_dark_forest(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/labyrinth_icon.png", timeout=5)
+    def goto_bounty_board(self, adb, vision=None) -> bool:
+        self.goto_dark_forest(adb, vision)
+        adb.tap(*coords.FOREST_BOUNTY_BOARD)
+        time.sleep(1.5)
+        return True
 
-    def goto_bounty_board(self, adb, vision) -> bool:
-        if not self.goto_dark_forest(adb, vision):
-            return False
-        return vision.wait_and_tap(adb, "icons/bounty_board_icon.png", timeout=5)
+    def goto_challenger(self, adb, vision=None) -> bool:
+        self.goto_dark_forest(adb, vision)
+        adb.tap(*coords.FOREST_LEGENDS_CHALLENGER)
+        time.sleep(1.5)
+        return True
+
+    # ----------------------------------------------------------- fallbacks
+    def goto_main_menu(self, adb, vision=None, max_attempts: int = 6) -> bool:
+        """Mash BACK + dismiss popups until we land on the campaign screen."""
+        for _ in range(max_attempts):
+            if vision:
+                self.popup.dismiss_all(adb, vision)
+            adb.tap(*coords.NAV_CAMPAIGN)
+            time.sleep(1.2)
+            if vision:
+                self.popup.dismiss_all(adb, vision)
+            return True
+        return False

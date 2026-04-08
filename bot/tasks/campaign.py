@@ -1,4 +1,9 @@
-"""Campaign push loop with retry and formation swap logic."""
+"""Campaign push loop with retry and formation swap logic.
+
+Coordinate-driven navigation and button taps. Template matching is retained
+ONLY for Victory / Defeat banner detection after each battle — we genuinely
+need to see the pixels to know the outcome.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from typing import Optional
 from loguru import logger
 
 from .base import BaseTask
+from .. import coords
 from ..strategy.formations import formation_for_chapter
 
 
@@ -22,30 +28,39 @@ class CampaignTask(BaseTask):
         self.give_up_after = give_up_after
         self.wait_hours_on_block = wait_hours_on_block
 
+    def _dismiss(self) -> None:
+        self.popup.dismiss_all(self.adb, self.vision)
+
     def _wait_for_result(self, timeout: int = 180) -> Optional[str]:
+        """Watch for the Victory / Defeat banner template.
+
+        This is the one place in the campaign loop that still uses template
+        matching — the battle outcome can't be inferred from a fixed pixel.
+        """
         start = time.time()
         while time.time() - start < timeout:
             screenshot = self.adb.screenshot()
-            if self.vision.find(screenshot, "screens/victory.png", 0.82):
+            if self.vision.find(screenshot, "screens/victory.png", 0.70):
                 return "victory"
-            if self.vision.find(screenshot, "screens/defeat.png", 0.82):
+            if self.vision.find(screenshot, "screens/defeat.png", 0.70):
                 return "defeat"
             time.sleep(2)
         return None
 
-    def _tap_formation(self, idx: int) -> bool:
-        """Tap the idx-th saved formation slot (1-5)."""
-        if not self.vision.wait_and_tap(self.adb, "buttons/formations.png", timeout=5):
-            return False
+    def _swap_formation(self, slot: int) -> None:
+        """Switch to the Nth saved formation (1-5)."""
+        if slot < 1 or slot > len(coords.FORMATION_SLOTS):
+            return
+        self.adb.tap(*coords.FORMATION_BUTTON)
         time.sleep(1.0)
-        # Formation slot y-coordinates (1080x1920 portrait).
-        slot_y = 650 + (idx - 1) * 180
-        self.adb.tap(540, slot_y)
+        self.adb.tap(*coords.FORMATION_SLOTS[slot - 1])
         time.sleep(0.6)
-        return self.vision.wait_and_tap(self.adb, "buttons/use.png", timeout=5)
+        self.adb.tap(*coords.FORMATION_USE_BUTTON)
+        time.sleep(0.6)
+        self._dismiss()
 
     def push(self) -> bool:
-        self.log("starting campaign push")
+        self.log("starting campaign push (coord-driven)")
         failures = 0
         total_attempts = 0
         formation_idx = 1
@@ -60,38 +75,36 @@ class CampaignTask(BaseTask):
                 self._record("blocked", f"ch{chapter} after {total_attempts} attempts")
                 return False
 
-            self.popup.dismiss_all(self.adb, self.vision)
+            self._dismiss()
             self.nav.goto_campaign(self.adb, self.vision)
+            time.sleep(0.8)
+            self._dismiss()
 
-            if not self.vision.wait_and_tap(self.adb, "buttons/stage_challenge.png", 10):
-                self.log("no challenge stage — chapter complete or locked")
-                return True
+            # Tap the stage marker to open the battle prep screen.
+            self.adb.tap(*coords.CAMPAIGN_STAGE_MARKER)
+            time.sleep(1.2)
+            self._dismiss()
 
-            time.sleep(2)
-            self.popup.dismiss_all(self.adb, self.vision)
-
-            if not self.vision.wait_and_tap(self.adb, "buttons/battle_begin.png", 10):
-                self.log("no begin button — trying alternative flow")
-                continue
+            # Begin battle.
+            self.adb.tap(*coords.CAMPAIGN_BEGIN_BATTLE)
 
             result = self._wait_for_result(timeout=180)
             if result == "victory":
                 failures = 0
                 time.sleep(3)
-                self.popup.dismiss_all(self.adb, self.vision)
-                # Tap next / continue safe zone.
-                self.adb.tap(540, 1600)
+                self._dismiss()
+                self.adb.tap(*coords.BATTLE_CONTINUE)
                 self._record("victory", f"ch{chapter}")
                 if self.state:
                     self.state.set("last_victory_at", time.time())
             elif result == "defeat":
                 failures += 1
-                self.vision.wait_and_tap(self.adb, "buttons/confirm.png", 10)
+                self.adb.tap(*coords.BATTLE_RETRY)
                 self.log(f"defeat #{failures} (total {total_attempts})")
                 if failures >= self.swap_formation_after and formation_idx < len(plan):
                     formation_idx += 1
                     self.log(f"swapping formation -> {plan[formation_idx - 1]}")
-                    self._tap_formation(formation_idx)
+                    self._swap_formation(formation_idx)
                     failures = 0
                 if failures >= self.max_retries:
                     self.log(f"hit max retries ({self.max_retries}) — pausing")
@@ -99,7 +112,7 @@ class CampaignTask(BaseTask):
                     return False
             else:
                 self.log("unknown battle result — dismissing popups")
-                self.popup.dismiss_all(self.adb, self.vision)
+                self._dismiss()
 
     def run(self) -> bool:
         return self.push()

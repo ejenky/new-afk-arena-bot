@@ -1,49 +1,42 @@
-"""Arcane Labyrinth / Dismal Maze automation — best-effort navigation."""
+"""Arcane Labyrinth / Dismal Maze — coordinate-driven daily run."""
 
 from __future__ import annotations
 
 import time
 
 from .base import BaseTask
+from .. import coords
 
 
 class LabyrinthTask(BaseTask):
     name = "labyrinth"
 
-    def run(self) -> bool:
-        self.log("starting Arcane Labyrinth run")
-        if not self.nav.goto_labyrinth(self.adb, self.vision):
-            return False
+    def _dismiss(self) -> None:
         self.popup.dismiss_all(self.adb, self.vision)
 
-        # Enter the lower-tier maze (Dismal) for guaranteed daily clear.
-        if not self.vision.wait_and_tap(self.adb, "buttons/lab_enter.png", timeout=5):
-            self.log("lab enter button not found")
-            return False
+    def run(self) -> bool:
+        self.log("starting Arcane Labyrinth run")
+        self.nav.goto_labyrinth(self.adb, self.vision)
+        time.sleep(1.0)
+        self._dismiss()
 
-        for step in range(30):
-            self.popup.dismiss_all(self.adb, self.vision)
-            shot = self.adb.screenshot()
+        # Enter the lower-tier Dismal Maze for a guaranteed daily clear.
+        self.adb.tap(*coords.LAB_DISMAL_MAZE)
+        time.sleep(1.0)
+        self.adb.tap(*coords.LAB_ENTER)
+        time.sleep(1.5)
+        self._dismiss()
 
-            # Pick up rewards if present.
-            if self.vision.find_and_tap(self.adb, shot, "buttons/lab_collect.png", 0.82):
-                time.sleep(0.8)
-                continue
-
-            # Battle room — tap begin, wait for result.
-            if self.vision.find_and_tap(self.adb, shot, "buttons/battle_begin.png", 0.82):
-                time.sleep(45)
-                self.popup.dismiss_all(self.adb, self.vision)
-                continue
-
-            # Move toward next unvisited tile (center-up).
-            self.adb.tap(540, 900)
+        # Greedy walk: tap center, begin any battle encountered, repeat.
+        for _ in range(30):
+            self._dismiss()
+            self.adb.tap(*coords.LAB_BEGIN)
+            time.sleep(1.0)
+            # Battle might have started — wait briefly for auto-completion.
+            time.sleep(25)
+            self._dismiss()
+            self.adb.tap(*coords.LAB_MOVE_UP)
             time.sleep(1.0)
 
-            if self.vision.find(shot, "screens/lab_complete.png", 0.82):
-                self.log("labyrinth complete")
-                break
-
-        # Collect lab store purchases via Store task for labyrinth-specific items.
-        self._record("labyrinth", "completed daily run")
+        self._record("labyrinth", "daily run attempted")
         return True
